@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# Legacy
+_archive/
+
+# Temporary & Intermediate Data
+filtered_tesla_news.csv
+processed_sentiment_db.csv
+raw_news_data.csv

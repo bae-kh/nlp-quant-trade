@@ -1,0 +1,7 @@
+pandas
+yfinance
+streamlit
+openai
+python-dotenv
+tqdm
+pydantic
