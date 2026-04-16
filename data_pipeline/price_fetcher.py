@@ -3,6 +3,7 @@ import logging
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+import ta # pip install ta
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ class PriceFetcher:
             if df.isnull().values.any():
                 logger.warning(f"[{ticker}] 일봉 데이터에 결측치(NaN)가 감지되었습니다. ffill 처리를 진행합니다.")
                 df.ffill(inplace=True)
+                
+            # ta 라이브러리를 통한 정량적 지표 계산 (RSI, MACD)
+            df['RSI_14'] = ta.momentum.RSIIndicator(close=df['Close'], window=14).rsi()
+            df['MACD_diff'] = ta.trend.MACD(close=df['Close']).macd_diff()
+            df.dropna(inplace=True)
                 
             return df
             
