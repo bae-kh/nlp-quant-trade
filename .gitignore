@@ -11,3 +11,5 @@ _archive/
 filtered_tesla_news.csv
 processed_sentiment_db.csv
 raw_news_data.csv
+
+quant_trade.db
