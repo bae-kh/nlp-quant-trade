@@ -68,7 +68,7 @@ Your response MUST be entirely and exclusively a valid JSON object matching the 
 """
         try:
             # 10초 타임아웃을 설정한 비동기 호출 (응답 형식 JSON 강제)
-            model_name = "llama3" if self.use_local_llm else "gpt-4o"
+            model_name = "llama3" if self.use_local_llm else "gpt-4o-mini"
             response = await self.client.chat.completions.create(
                 model=model_name,
                 messages=[

@@ -209,7 +209,7 @@ def run_daily_pipeline():
             return
 
         settings = Settings()
-        analyzer = SentimentAnalyzer(settings, use_local_llm=True)
+        analyzer = SentimentAnalyzer(settings, use_local_llm=settings.USE_LOCAL_LLM)
         import asyncio
         reasoning, score, conf = asyncio.run(analyzer.analyze_sentiment(todays_news))
         logging.info(f"LLM 판단 결과 - 점수: {score}, 확신도: {conf}% | 근거: {reasoning}")

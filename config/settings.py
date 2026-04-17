@@ -15,5 +15,9 @@ class Settings:
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "dummy_openai_key")
         self.FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "dummy_finnhub_key")
         
+        # 로컬 LLM 사용 여부 (기본값 False -> OpenAI API 사용)
+        use_local_str = os.getenv("USE_LOCAL_LLM", "False")
+        self.USE_LOCAL_LLM = use_local_str.lower() in ("true", "1", "t", "yes")
+        
         # 퀀트 스위칭 수수료 (Slippage 및 브로커 수수료율 합산: 0.1%)
         self.TRANSACTION_FEE = 0.001
