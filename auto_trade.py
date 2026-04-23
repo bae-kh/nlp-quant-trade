@@ -4,12 +4,12 @@ import os
 import requests
 import json
 import math
-import yfinance as yf # 실전용 추가: 야후 파이낸스
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from config.settings import Settings
 from nlp_engine.analyzer import SentimentAnalyzer
 from data_pipeline.price_fetcher import PriceFetcher
+import xml.etree.ElementTree as ET
 from database.db_logger import DBLogger # 실전용 추가: DB 저장
 
 logging.basicConfig(filename='daily_trade.log', level=logging.INFO, 
@@ -37,22 +37,33 @@ def send_telegram_message(message: str):
 # [실전용 추가] 1. 실시간 뉴스 크롤링 모듈
 def fetch_today_news(ticker: str) -> str:
     try:
-        logging.info(f"[{ticker}] 실시간 Yahoo Finance 뉴스 크롤링을 시작합니다.")
-        stock = yf.Ticker(ticker)
-        news_list = stock.news
+        logging.info(f"[{ticker}] 구글 뉴스 RSS 크롤링을 시작합니다.")
         
-        if not news_list:
+        # yfinance 대신 구조가 안정적인 Google News RSS 사용
+        url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        
+        root = ET.fromstring(res.content)
+        items = root.findall('.//item')[:5] # 최신 5개 기사 추출
+        
+        if not items:
             logging.warning("가져온 뉴스가 없습니다.")
             return ""
             
-        recent_news = news_list[:5] # 최신 5개 추출
         combined_text = []
-        for item in recent_news:
-            title = item.get('title', '')
-            summary = item.get('summary', '') 
-            combined_text.append(f"Title: {title}\nSummary: {summary}\n")
+        for item in items:
+            title = item.findtext('title') or ''
+            pub_date = item.findtext('pubDate') or ''
+            combined_text.append(f"Title: {title}\nDate: {pub_date}\n")
             
         final_news_string = "\n".join(combined_text)
+        
+        # [핵심 방어 로직] "Title:" 같은 껍데기만 남는 것을 방지하기 위해 실제 텍스트 길이를 검증
+        if len(final_news_string.replace("Title:", "").replace("Date:", "").strip()) < 20:
+            logging.warning("뉴스 데이터가 유효하지 않아 빈 문자열을 반환합니다.")
+            return ""
+            
         logging.info("실시간 뉴스 텍스트 추출 완료.")
         return final_news_string
         
