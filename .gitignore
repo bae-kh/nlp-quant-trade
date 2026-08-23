@@ -1,30 +1,25 @@
+# Local secrets
 .env
-__pycache__/
-*.pyc
-.pytest_cache/
-.DS_Store
+.env.*
+!.env.example
+
+# Python environments and caches
 .venv/
 venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Logs
-daily_trade.log
-cron_execution.log
+# Build and editor artifacts
+build/
+dist/
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/
+
+# Runtime output
 *.log
-
-# Temporary & Intermediate Data
-filtered_tesla_news.csv
-processed_sentiment_db.csv
-raw_news_data.csv
-
-# Database (contains trading history — not for public repo)
-quant_trade.db
-
-# Raw dataset (too large for public repo — download separately)
-tesla_news_2020_2022.csv
-
-# LLM sentiment analysis cache (contains API call results — regenerate locally)
-backtest_sentiment_cache.csv
-
-# Generated reports (auto-generated output — not for version control)
-# sample_market_report.md is intentionally included in Git
 reports/generated/

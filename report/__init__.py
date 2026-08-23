@@ -1,1 +1,1 @@
-# report package
+"""검증된 분석 결과를 Markdown으로 조립하는 리포트 패키지입니다."""

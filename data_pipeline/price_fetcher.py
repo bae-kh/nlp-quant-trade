@@ -1,91 +1,182 @@
 # file path: data_pipeline/price_fetcher.py
+from __future__ import annotations
+
 import logging
+from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Callable
+
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
-import ta  # pip install ta
+
+from workflow.analysis_window import AnalysisWindow
 
 logger = logging.getLogger(__name__)
 
 
+class PriceFetchError(RuntimeError):
+    """가격 제공자 호출 또는 응답 형식이 잘못됐을 때 발생합니다."""
+
+
+class PriceDataUnavailableError(PriceFetchError):
+    """요청한 분석 기간에 사용할 가격 관측값이 없을 때 발생합니다."""
+
+
+@dataclass(frozen=True)
+class PriceHistory:
+    """리포트 기간과 지표 warm-up을 함께 담은 원본 일봉 수집 결과입니다."""
+
+    ticker: str
+    window: AnalysisWindow
+    warmup_start_date: date
+    fetch_end_date: date
+    report_observation_count: int
+    history: pd.DataFrame
+
+
 class PriceFetcher:
-    """
-    US Equity (yfinance 등)의 주가 데이터를 가져오고 결측치를 전처리하는 클래스입니다.
+    """리포팅 분석에 필요한 미국 주식 원본 일봉을 yfinance에서 수집합니다."""
 
-    [설계 배경]
-    - 결측치 전처리에 Forward Fill(ffill)을 적용합니다. 시장 휴장일이나 통신 지연으로
-      주가 데이터에 NaN이 발생하면, 직전 유효 체결가를 현재 가격으로 인식하는 시장 특성을
-      반영합니다. 이를 통해 이동평균 지표 왜곡과 Look-ahead 편향을 동시에 방어합니다.
-    - ta 라이브러리를 통해 RSI(14)와 MACD_diff를 자동 계산합니다.
-    """
+    DEFAULT_WARMUP_CALENDAR_DAYS = 90
 
-    def __init__(self):
-        pass
+    def __init__(
+        self,
+        *,
+        downloader: Callable[..., pd.DataFrame] = yf.download,
+        timeout_seconds: int = 15,
+    ):
+        self._downloader = downloader
+        self._timeout_seconds = timeout_seconds
 
-    def get_daily_data(self, ticker: str = "TSLA", start_date: str = "2020-01-01", end_date: str = "2023-01-31") -> pd.DataFrame:
+    def fetch_analysis_history(
+        self,
+        ticker: str,
+        window: AnalysisWindow,
+        *,
+        warmup_calendar_days: int = DEFAULT_WARMUP_CALENDAR_DAYS,
+    ) -> PriceHistory:
+        """리포팅용 원본 일봉을 warm-up 기간과 함께 수집합니다.
+
+        ``history``에는 RSI/MACD 같은 파생 지표를 추가하지 않으며, 지표
+        결측치를 이유로 가격 행을 삭제하거나 채우지 않습니다. 보고 지표는
+        :class:`analysis.market_analyzer.MarketAnalyzer`가 이 원본 데이터에서
+        계산합니다.
+
+        yfinance의 ``end``는 미포함이므로 실제 요청은 분석 종료일의 다음 날까지
+        전달합니다. 반환 결과는 warm-up 시작일부터 분석 종료일까지로 다시
+        제한해 제공자 응답에 미래 데이터가 섞여도 사용되지 않게 합니다.
         """
-        주가(TSLA 등)의 일봉(Daily) OHLCV 데이터를 Pandas DataFrame으로 반환합니다.
-        테슬라 백테스트를 위해 기본값을 2020년 1월 ~ 2023년 1월로 설정합니다.
-        """
+        normalized_ticker = self._normalize_ticker(ticker)
+        if warmup_calendar_days < 0:
+            raise ValueError("warmup_calendar_days must be 0 or greater")
+
+        warmup_start = window.start_date - timedelta(days=warmup_calendar_days)
+        provider_end_exclusive = window.end_date + timedelta(days=1)
+
+        logger.info(
+            "[%s] 원본 일봉 수집: %s ~ %s (보고 기간 %s ~ %s, warm-up %d일)",
+            normalized_ticker,
+            warmup_start,
+            window.end_date,
+            window.start_date,
+            window.end_date,
+            warmup_calendar_days,
+        )
+
         try:
-            # yfinance는 end_date 당일을 미포함하므로, 안전하게 하루 뒤로 밀어줍니다.
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-            end_str = end_dt.strftime("%Y-%m-%d")
+            downloaded = self._downloader(
+                normalized_ticker,
+                start=warmup_start.isoformat(),
+                end=provider_end_exclusive.isoformat(),
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                timeout=self._timeout_seconds,
+            )
+        except Exception as exc:
+            raise PriceFetchError(
+                f"{normalized_ticker} 가격 제공자 호출에 실패했습니다."
+            ) from exc
 
-            logger.info(f"[{ticker}] {start_date} 부터 {end_date} 간의 일봉 데이터를 요청합니다.")
+        history = self._normalize_analysis_history(
+            downloaded,
+            ticker=normalized_ticker,
+            start_date=warmup_start,
+            end_date=window.end_date,
+        )
 
-            df = yf.download(ticker, start=start_date, end=end_str, interval="1d", progress=False, timeout=15)
+        report_dates = history.index.date
+        report_mask = (report_dates >= window.start_date) & (
+            report_dates <= window.end_date
+        )
+        report_observation_count = int(report_mask.sum())
+        if report_observation_count == 0:
+            raise PriceDataUnavailableError(
+                f"{normalized_ticker}의 분석 기간({window.start_date} ~ "
+                f"{window.end_date}) 가격 데이터가 없습니다."
+            )
 
-            if df.empty:
-                logger.warning(f"[{ticker}] 반환된 일봉 데이터가 없습니다.")
-                return df
+        return PriceHistory(
+            ticker=normalized_ticker,
+            window=window,
+            warmup_start_date=warmup_start,
+            fetch_end_date=window.end_date,
+            report_observation_count=report_observation_count,
+            history=history,
+        )
 
-            # 멀티인덱스 컬럼 평탄화 (yfinance 최신 버전 호환성)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+    @staticmethod
+    def _normalize_ticker(ticker: str) -> str:
+        if not isinstance(ticker, str) or not ticker.strip():
+            raise ValueError("ticker must not be empty")
+        return ticker.strip().upper()
 
-            # 결측치 확인 및 전처리(Forward Fill)
-            if df.isnull().values.any():
-                logger.warning(f"[{ticker}] 일봉 데이터에 결측치(NaN)가 감지되었습니다. ffill 처리를 진행합니다.")
-                df.ffill(inplace=True)
+    @staticmethod
+    def _normalize_analysis_history(
+        downloaded: pd.DataFrame,
+        *,
+        ticker: str,
+        start_date: date,
+        end_date: date,
+    ) -> pd.DataFrame:
+        if not isinstance(downloaded, pd.DataFrame) or downloaded.empty:
+            raise PriceDataUnavailableError(
+                f"{ticker} 가격 제공자가 빈 데이터를 반환했습니다."
+            )
 
-            # ta 라이브러리를 통한 정량적 지표 계산 (RSI, MACD)
-            df['RSI_14'] = ta.momentum.RSIIndicator(close=df['Close'], window=14).rsi()
-            df['MACD_diff'] = ta.trend.MACD(close=df['Close']).macd_diff()
-            df.dropna(inplace=True)
+        history = downloaded.copy()
+        if isinstance(history.columns, pd.MultiIndex):
+            history.columns = history.columns.get_level_values(0)
 
-            return df
+        if "Close" not in history.columns:
+            raise PriceFetchError(
+                f"{ticker} 가격 데이터에 필수 Close 컬럼이 없습니다."
+            )
+        if history.columns.duplicated().any():
+            raise PriceFetchError(
+                f"{ticker} 가격 데이터에 중복 컬럼이 있습니다."
+            )
 
-        except Exception as e:
-            logger.error(f"[{ticker}] 일봉 데이터 수집 중 에러 발생: {e}")
-            return pd.DataFrame()
-
-    def get_hourly_data(self, ticker: str, hours: int = 24) -> pd.DataFrame:
-        """
-        최근 hours 시간 동안의 시간봉(Hourly) OHLCV 데이터를 Pandas DataFrame으로 반환합니다.
-        (주로 단기 모멘텀 확인용)
-        """
         try:
-            logger.info(f"[{ticker}] 최근 {hours}시간 간의 시간봉 데이터를 요청합니다.")
-            # yfinance에서 1h 봉은 최대 730일 기간 내에서만 사용 가능
-            df = yf.download(ticker, period="1mo", interval="1h", progress=False, timeout=15)
+            history.index = pd.DatetimeIndex(
+                pd.to_datetime(history.index, errors="raise")
+            )
+        except (TypeError, ValueError) as exc:
+            raise PriceFetchError(
+                f"{ticker} 가격 데이터의 날짜 index를 해석할 수 없습니다."
+            ) from exc
 
-            if df.empty:
-                logger.warning(f"[{ticker}] 반환된 시간봉 데이터가 없습니다.")
-                return df
+        if history.index.hasnans:
+            raise PriceFetchError(
+                f"{ticker} 가격 데이터의 날짜 index에 NaT가 포함되어 있습니다."
+            )
 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+        dates = history.index.date
+        in_requested_range = (dates >= start_date) & (dates <= end_date)
+        history = history.loc[in_requested_range].sort_index()
+        if history.empty:
+            raise PriceDataUnavailableError(
+                f"{ticker} 요청 범위 안에 가격 데이터가 없습니다."
+            )
 
-            # 앞서 구한 period("1mo")에서 최근 hours 개수만 필터링
-            df = df.tail(hours)
-
-            if df.isnull().values.any():
-                logger.warning(f"[{ticker}] 시간봉 데이터에 결측치(NaN)가 감지되었습니다. ffill 처리를 진행합니다.")
-                df.ffill(inplace=True)
-
-            return df
-
-        except Exception as e:
-            logger.error(f"[{ticker}] 시간봉 데이터 수집 중 에러 발생: {e}")
-            return pd.DataFrame()
+        return history

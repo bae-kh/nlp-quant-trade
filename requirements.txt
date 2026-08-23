@@ -1,17 +1,9 @@
-# === Core Dependencies ===
-pandas
-yfinance
-openai
-python-dotenv
-pydantic
-ta
-requests
-
-# === Dashboard ===
-streamlit
-plotly
-
-# === Testing ===
-pytest
-pytest-asyncio
-pytest-mock
+# Runtime dependencies verified with Python 3.13.9 on 2026-08-23.
+numpy==2.3.5
+openai==2.31.0
+pandas==2.3.3
+pydantic==2.12.4
+python-dotenv==1.1.0
+requests==2.32.5
+ta==0.11.0
+yfinance==1.2.1
